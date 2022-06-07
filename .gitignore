@@ -38,5 +38,6 @@ vignettes/*.pdf
 # R Environment Variables
 .Renviron
 
-# Data directory
+# Data and output directories
 data
+output
