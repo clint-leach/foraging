@@ -19,15 +19,6 @@ data <- read.csv("data/GLBA_SEOT_Forage_Data_1993-2019.csv") %>%
 # Reading in Glacier Bay shapefile for mapping
 gb <- st_read(dsn = "data/PH6502/historicl1.shp")
 
-# Oceanographic data ===========================================================
-
-ocean <- read.csv("data/OC_D_1993-2020.csv", skip = 14)
-
-ocean %>% 
-  subset(cruise_year == 2020 & depth == 1) %>% 
-  ggplot(aes(latitude, oxygen)) + 
-  geom_point(aes(color = region_name))
-
 # Summaries ====================================================================
 
 # How many bouts
@@ -62,22 +53,62 @@ sum(data$preytype_cd == "uni" & data$success_cd == "y")
 # How many successful dives
 sum(data$success_cd == "y")
 
+# Dive success codes
 data %>% 
   ggplot(aes(success_cd)) + 
   geom_bar()
 
+# Where are unsuccessful dives distributed within a bout?
+bout_sum <- ddply(data, .(bout_id), summarise,
+                  ndives = max(dive_num))
+data %>% 
+  join(bout_sum) %>% 
+  subset(success_cd == "n") %>% 
+  subset(ndives > 1) %>% 
+  mutate(bout_pos = dive_num / ndives) %>% 
+  ggplot(aes(bout_pos)) + 
+  geom_histogram()
+
+# How often do bouts end on an unsuccessful dive?
+data %>% 
+  join(bout_sum) %>% 
+  subset(dive_num == ndives) %>% 
+  ggplot(aes(success_cd)) + 
+  geom_bar()
+
 # Multiple prey ================================================================
+ 
+bout_ids = unique(data$bout_id)
 
 # How many dives have a prey type with multiple individuals
 data %>% 
   ggplot(aes(prey_qty)) + 
-  geom_histogram()
+  geom_bar()
 
 # Prey quantity by prey type
 data %>% 
   ggplot(aes(prey_qty)) + 
   geom_histogram() + 
   facet_wrap(~SOFA_category)
+
+# Total number of prey items per dive (summed across type)
+data %>% 
+  subset(success_cd %in% c("y", "n")) %>% 
+  mutate(prey_qty = ifelse(is.na(prey_qty), 0, prey_qty)) %>% 
+  ddply(.(bout_id, dive_num), summarise,
+        nprey = sum(prey_qty)) %>% 
+  ggplot(aes(nprey)) + 
+  geom_bar()
+
+data %>% 
+  subset(success_cd %in% c("y", "n")) %>% 
+  subset(bout_id %in% sample(bout_ids, 20)) %>% 
+  mutate(prey_qty = ifelse(is.na(prey_qty), 0, prey_qty)) %>% 
+  ddply(.(bout_id, dive_num), summarise,
+        nprey = sum(prey_qty)) %>% 
+  ggplot(aes(nprey)) + 
+  geom_bar() + 
+  facet_wrap(~bout_id)
 
 # How many dives have multiple types of prey (excluding unidentified)
 data %>% 
