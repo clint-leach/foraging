@@ -1,106 +1,111 @@
 data {
-  int<lower=0> nb;
+  int<lower = 1> nb;
   int nd[nb];
-  int<lower = 0> np;
-  int<lower = 0> ny;
+  int<lower = 1> np;
+  int<lower = 1> nsp;
   int<lower = 0> nr;
-  int<lower = 0> P;
-  int y[sum(nd), np];
-  matrix[nb, P] X;
-  matrix[nb, ny] Z;
+  int<lower = 0> P_psi;
+  int<lower = 0> P_lambda;
+  int y[np, sum(nd)];
+  matrix[nb, P_psi] X_psi;
+  matrix[nb, P_lambda] X_lambda;
   int bout_idx[nb];
+  int sp_idx[np];
   matrix[nb, nb] dists;
+  matrix[nb, nb] L;
   int blocks[2, nr];
   int block_size[nr];
-  vector[np] rho;
+  vector[nsp] rho;
 }
 parameters {
-  matrix[P, np] beta;
-  vector<lower = 0>[np - 1] a;
-  vector<lower = 0>[np] h;
-  vector<lower = 0>[np] sigma;
-  matrix[nb, np] omega_raw;
-  matrix[ny, np] xi;
+  matrix[P_psi, nsp] beta;
+  matrix[P_lambda, np] alpha;
+  vector<lower = 0>[nsp] sigma;
+  matrix[nb, nsp] omega_raw;
 }
 transformed parameters {
   
-  matrix[nb, np] omega;
-  vector[np] a_all;
-  matrix[nb, np] eta;
-  matrix[nb, np] lambda;
+  matrix[nb, nsp] omega;
+  matrix[nb, np] log_lambda;
+  matrix[nb, nsp] logit_psi;
 
   // Spatial-GP
-  for (k in 1:np){
-    for (i in 1:nr){
-      matrix[block_size[i], block_size[i]] K;
-      matrix[block_size[i], block_size[i]] L;
-      
-      for(j in 1:block_size[i]){
-        for(l in 1:block_size[i]){
-          K[j, l] = sigma[k] ^ 2 * exp(-dists[blocks[1, i] - 1 + j, blocks[1, i] - 1 + l] / rho[k]);
-        }
-        
-        K[j, j] += 1e-8;
-      }
-      
-      L = cholesky_decompose(K);
-      omega[blocks[1, i]:blocks[2, i], k] = L * omega_raw[blocks[1, i]:blocks[2, i], k];
-    } 
+  // for (k in 1:nsp){
+  //   for (i in 1:nr){
+  //     matrix[block_size[i], block_size[i]] K;
+  //     matrix[block_size[i], block_size[i]] L;
+  // 
+  //     for(j in 1:block_size[i]){
+  //       for(l in 1:block_size[i]){
+  //         K[j, l] = sigma[k] ^ 2 * exp(-dists[blocks[1, i] - 1 + j, blocks[1, i] - 1 + l] / rho[k]);
+  //       }
+  // 
+  //       K[j, j] += 1e-8;
+  //     }
+  // 
+  //     L = cholesky_decompose(K);
+  //     omega[blocks[1, i]:blocks[2, i], k] = L * omega_raw[blocks[1, i]:blocks[2, i], k];
+  //   }
+  // }
+  
+  for (k in 1:nsp){
+    omega[, k] = sigma[k] * omega_raw[, k];
   }
   
-  // Otter attack rate (with one value pinned to 1)
-  a_all[1] = 1.0;
-  a_all[2:np] = a;
+  // Latent species occupancy
+  logit_psi = X_psi * beta + omega;
   
-  // Latent prey density
-  eta = exp(X * beta + Z * xi + omega);
-  
-  // Functional response
-  for(k in 1:np){
-    for(i in 1:nb){
-      lambda[i, k] = a_all[k] * eta[i, k] / (1 + sum(a_all .* h .* eta[i, ]'));
-    }
-  }
+  // Counts by species/size
+  log_lambda = X_lambda * alpha;
 }
 
 model {
   
-  // Priors on prey species params
+  // Occupancy regression coefficients
+  to_vector(beta) ~ normal(0, 2.5);
   
-  // Attack rate
-  a ~ gamma(1.0, 1.0);
+  // Count regression coefficients
+  to_vector(alpha) ~ normal(0, 2.5);
   
-  // Handling time
-  h ~ gamma(1.0, 1.0);
+  // Sds of bout-level random effects
+  sigma ~ normal(0, 1.0);
   
-  // Spatial marginal variance
-  sigma ~ normal(0, 2);
-  
-  // Regression coefficients
-  to_vector(beta) ~ normal(0, 2.0);
-  
-  // Temporal random effects
-  to_vector(xi) ~ normal(0, 2.0);
+  // Unscaled bout-level random effects
+  for(k in 1:nsp){
+    omega_raw[, k] ~ std_normal();
+  }
   
   // Data model 
   for(k in 1:np){
     for(i in 1:nb){
       for(j in 1:nd[i]){
-        y[bout_idx[i] + j, k] ~ poisson(lambda[i, k]);
+        if(y[k][bout_idx[i] + j - 1] == 0){
+          target += log_sum_exp(log1m_inv_logit(logit_psi[i, sp_idx[k]]), 
+                                log_inv_logit(logit_psi[i, sp_idx[k]]) + poisson_log_lpmf(0 | log_lambda[i, k]));
+          
+        } else {
+          target += log_inv_logit(logit_psi[i, sp_idx[k]]) + poisson_log_lpmf(y[k][bout_idx[i] + j - 1] | log_lambda[i, k]);
+        }
       }
     }
   }
 }
 generated quantities{
   
-  int yhat[sum(nd), np];
+  int yhat[np, sum(nd)];
+  int zhat[nsp, nb];
+
+  for(k in 1:nsp){
+    for(i in 1:nb){
+      zhat[k][i] = bernoulli_logit_rng(logit_psi[i, sp_idx[k]]);
+    }
+  }
   
   for(k in 1:np){
     for(i in 1:nb){
       for(j in 1:nd[i]){
-        yhat[bout_idx[i] + j, k] = poisson_rng(lambda[i, k]);
+        yhat[k][bout_idx[i] + j - 1] = zhat[sp_idx[k]][i] * poisson_log_rng(log_lambda[i, k]);
       }
     }
   }
 }
-
