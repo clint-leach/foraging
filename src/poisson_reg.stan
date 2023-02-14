@@ -3,14 +3,16 @@ data {
   int nd[nb];
   int<lower = 1> np;
   int<lower = 1> nsp;
+  int nsz[nsp];
   int<lower = 0> nr;
   int<lower = 0> P_psi;
   int<lower = 0> P_lambda;
   int y[np, sum(nd)];
+  int y_occ[nsp, nb];
   matrix[nb, P_psi] X_psi;
   matrix[nb, P_lambda] X_lambda;
   int bout_idx[nb];
-  int sp_idx[np];
+  int sp_idx[nsp];
   matrix[nb, nb] dists;
   matrix[nb, nb] L;
   int blocks[2, nr];
@@ -65,7 +67,7 @@ model {
   to_vector(beta) ~ normal(0, 2.5);
   
   // Count regression coefficients
-  to_vector(alpha) ~ normal(0, 2.5);
+  to_vector(alpha) ~ normal(0, 5);
   
   // Sds of bout-level random effects
   sigma ~ normal(0, 1.0);
@@ -76,15 +78,17 @@ model {
   }
   
   // Data model 
-  for(k in 1:np){
+  for(k in 1:nsp){
     for(i in 1:nb){
-      for(j in 1:nd[i]){
-        if(y[k][bout_idx[i] + j - 1] == 0){
-          target += log_sum_exp(log1m_inv_logit(logit_psi[i, sp_idx[k]]), 
-                                log_inv_logit(logit_psi[i, sp_idx[k]]) + poisson_log_lpmf(0 | log_lambda[i, k]));
-          
-        } else {
-          target += log_inv_logit(logit_psi[i, sp_idx[k]]) + poisson_log_lpmf(y[k][bout_idx[i] + j - 1] | log_lambda[i, k]);
+      if(y_occ[k, i] == 0){
+        target += log_sum_exp(log1m_inv_logit(logit_psi[i, k]), 
+                              log_inv_logit(logit_psi[i, k]) + nd[i] * poisson_log_lpmf(0 | sub_row(log_lambda, i, sp_idx[k], nsz[k])));
+      } else{
+        target += log_inv_logit(logit_psi[i, k]);
+        for(l in 1:nsz[k]){
+          for(j in 1:nd[i]){
+            target += poisson_log_lpmf(y[sp_idx[k] + l - 1][bout_idx[i] + j - 1] | log_lambda[i, sp_idx[k] + l - 1]);
+          }
         }
       }
     }
@@ -97,14 +101,16 @@ generated quantities{
 
   for(k in 1:nsp){
     for(i in 1:nb){
-      zhat[k][i] = bernoulli_logit_rng(logit_psi[i, sp_idx[k]]);
+      zhat[k][i] = bernoulli_logit_rng(logit_psi[i, k]);
     }
   }
   
-  for(k in 1:np){
-    for(i in 1:nb){
-      for(j in 1:nd[i]){
-        yhat[k][bout_idx[i] + j - 1] = zhat[sp_idx[k]][i] * poisson_log_rng(log_lambda[i, k]);
+  for(k in 1:nsp){
+    for(l in 1:nsz[k]){
+      for(i in 1:nb){
+        for(j in 1:nd[i]){
+          yhat[sp_idx[k] + l - 1][bout_idx[i] + j - 1] = zhat[k][i] * poisson_log_rng(log_lambda[i, sp_idx[k] + l - 1]);
+        }
       }
     }
   }
