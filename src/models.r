@@ -64,10 +64,10 @@ zip <- nimbleCode({
       
       for(j in 1:nd[i]){
         w[bout_idx[i] + j - 1, k] ~ dbern(z[i, k] * phi[i, k])
-        y[bout_idx[i] + j - 1, k] ~ dpois(z[i, k] * lambda[i, k])
+        y[bout_idx[i] + j - 1, k] ~ dpois(w[bout_idx[i] + j - 1, k] * lambda[i, k])
 
         what[bout_idx[i] + j - 1, k] ~ dbern(zhat[i, k] * phi[i, k])
-        yhat[bout_idx[i] + j - 1, k] ~ dpois(z[i, k] * lambda[i, k])
+        yhat[bout_idx[i] + j - 1, k] ~ dpois(what[bout_idx[i] + j - 1, k] * lambda[i, k])
       }
     }
   }
