@@ -18,20 +18,30 @@ all <- readRDS("data/processed.rds")
 bouts <- all$bout_length
 
 # Observations
-y <- all$y[, -c(1:2)]
+# y <- all$y[, -c(1:2)]
+y <- select(all$y, !c(clam_4, crab_4, modiolus_4, mussel_3, urchin_3))
+# y <- select(all$y, c(bout_id, dive_num, clam_1, clam_2, clam_3, urchin_1, urchin_2))
 
-y_occ <- all$y %>% 
+y_bout <- y %>%
   pivot_longer(!(bout_id:dive_num),
-               names_to = "prey", 
-               values_to = "y") %>% 
+               names_to = "prey",
+               values_to = "y") %>%
   ddply(.(prey, bout_id), summarise,
-        occ = sum(y) > 0) %>% 
-  pivot_wider(names_from = bout_id, values_from = occ)
+        y = sum(y)) %>%
+  pivot_wider(names_from = bout_id, values_from = y)
+
+# y_occ <- y %>%
+#   pivot_longer(!(bout_id:dive_num),
+#                names_to = "prey",
+#                values_to = "y") %>%
+#   ddply(.(prey, bout_id), summarise,
+#         occ = sum(y) > 0) %>%
+#   pivot_wider(names_from = bout_id, values_from = occ)
 
 # Covariates
 X <- all$bout_dat %>% 
   dplyr::select(lat, depth, slope, current, density) %>% 
-  colwise(scale)() %>%
+  colwise(function(x){(x - mean(x)) / (2 * sd(x))})() %>%
   mutate(density_sq = density ^ 2) %>%
   as.matrix()
 
@@ -45,7 +55,8 @@ blocks = all$domains %>%
   t()
 
 # Species id of each prey type
-sp_idx <- all$sp_idx
+# sp_idx <- all$sp_idx
+sp_idx <- c(1, 1, 1, 2, 2, 2, 3, 3, 3, 4, 4, 5, 5)
 
 spxsz <- matrix(0, nrow = max(sp_idx), ncol = length(sp_idx))
 for(i in 1:nrow(spxsz)){
@@ -64,14 +75,15 @@ for(i in 1:ncol(blocks)){
 # Defining constants
 const <- list(nb = nrow(bouts), 
               nd = bouts$nd, 
-              np = ncol(y),
+              np = length(sp_idx),
               nsp = max(sp_idx),
               nr = ncol(blocks),
-              P_env = ncol(X_env) + 1, 
+              P_env = ncol(X_env), 
               P_dyn = ncol(X_dyn),
-              y = y %>% t(),
-              y_occ = y_occ[, -1],
-              X_env = cbind(1, X_env), 
+              y = y_bout[, -1],
+              # y = y[, -c(1:2)] %>% t(),
+              # y_occ = y_occ[, -1],
+              X_env = X_env, 
               X_dyn = X_dyn,
               sp_idx = sp_idx,
               spxsz = spxsz,
@@ -80,27 +92,37 @@ const <- list(nb = nrow(bouts),
               L = L,
               blocks = blocks,
               block_size = all$domains$nbouts,
-              rho = rep(10, max(sp_idx))
+              rho = rep(10, max(sp_idx)),
+              nu_lambda = 5,
+              nu_tau = 5,
+              tau0 = 0.04
               )
 
 inits <- list(beta = matrix(0, nrow = const$P_env, ncol = const$nsp),
-              delta = matrix(0, nrow =const$P_dyn, ncol = const$np),
-              alpha = matrix(0, nrow = const$P_dyn, ncol = const$np),
+              delta_std = matrix(0, nrow =const$P_dyn, ncol = const$np),
+              delta0 = rep(0, const$np),
+              r1_delta = matrix(1, nrow = const$P_dyn, ncol = const$np),
+              r2_delta = matrix(1, nrow = const$P_dyn, ncol = const$np),
+              alpha_std = matrix(0, nrow = const$P_dyn, ncol = const$np),
               alpha0 = rep(0, const$np),
-              gamma = matrix(0, nrow = const$P_dyn, ncol = const$np),
-              gamma0 = rep(0, const$np),
+              r1_alpha = matrix(1, nrow = const$P_dyn, ncol = const$np),
+              r2_alpha = matrix(1, nrow = const$P_dyn, ncol = const$np),
+              r1_tau = rep(0.1, const$np),
+              r2_tau = rep(1, const$np),
               sigma = rep(0.1, const$nsp),
               omega = matrix(0, nrow = const$nb, ncol = const$nsp))
 
 
-mcmc <- stan(file = "src/poisson_reg.stan",
+mcmc <- stan(file = "src/bout_level.stan",
              data = const,
              init = list(inits),
-             iter = 1000,
+             iter = 2000,
              chains = 1, 
-             control = list(adapt_delta = 0.65))
+             control = list(adapt_delta = 0.99))
 
-saveRDS(mcmc, "output/multilevel.rds")
+pairs(mcmc, pars = c("gamma0", "alpha0"), include = T)
+
+saveRDS(mcmc, "output/poisson_horse_reg.rds")
 
 # Inference ====================================================================
 
@@ -122,10 +144,20 @@ beta %>%
   geom_vline(xintercept = 0) +
   theme_classic()
 
+# alpha0
+alpha0 <- rstan::extract(mcmc, "gamma0", permuted = TRUE)[[1]] %>% 
+  melt(varnames = c("iter", "prey"), value.name = "alpha0") %>% 
+  mutate(prey = names(y[, -c(1:2)])[prey])
+
+alpha0 %>% 
+  ggplot(aes(iter, alpha0)) + 
+  geom_line() + 
+  facet_grid(prey ~ ., scales = "free")
+
 # alphas
 alpha <- rstan::extract(mcmc, "alpha", permuted = TRUE)[[1]] %>% 
   melt(varnames = c("iter", "coefficient", "prey"), value.name = "alpha") %>% 
-  mutate(prey = names(y)[prey], coefficient = colnames(const$X_dyn)[coefficient])
+  mutate(prey = prey_sp$prey[prey], coefficient = colnames(X_dyn)[coefficient])
 
 alpha %>% 
   ggplot(aes(iter, alpha)) + 
@@ -133,7 +165,6 @@ alpha %>%
   facet_grid(coefficient ~ prey, scales = "free")
 
 alpha %>% 
-  # subset(coefficient == "") %>%
   ggplot(aes(alpha)) + 
   geom_histogram(bins = 50) + 
   facet_grid(prey ~ coefficient, scales = "free_x") + 
@@ -157,8 +188,8 @@ sigma %>%
   xlab("standard deviation of bout random effect")
 
 # Goodness of fit
-y_long <- all$y %>% 
-  pivot_longer(clam_1:urchin_3,
+y_long <- y %>% 
+  pivot_longer(clam_1:urchin_2,
                names_to = "prey", 
                values_to = "y") %>% 
   join(all$bout_length) %>% 
@@ -382,9 +413,6 @@ yhat %>%
   geom_histogram() +
   geom_vline(aes(xintercept = pzero), data = y_pzero) +
   facet_grid(prey ~.)
-
-
-# Posterior distribution of per-bout variance? Or overall variance by prey species?
 
 
 # Mechanistic simulation =======================================================
