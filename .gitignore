@@ -41,3 +41,6 @@ vignettes/*.pdf
 # Data and output directories
 data
 output
+
+# R data
+*.rds
