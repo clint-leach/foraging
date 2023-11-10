@@ -28,28 +28,28 @@ parameters {
   // lambda-level local effects
   matrix[P_local, np] delta_std;
   row_vector[np] delta0;
-  vector<lower = 0>[np] r1_delta;
-  vector<lower = 0>[np] r2_delta;
+  real<lower = 0> r1_delta;
+  real<lower = 0> r2_delta;
   
   // lambda-level global effects
   matrix[P_global, np] gamma_std;
-  vector<lower = 0>[np] r1_gamma;
-  vector<lower = 0>[np] r2_gamma;
+  real<lower = 0> r1_gamma;
+  real<lower = 0> r2_gamma;
   
   //lambda-level coefficient shrinkage
-  vector<lower = 0>[np] r1_tau_count;
-  vector<lower = 0>[np] r2_tau_count;
+  real<lower = 0> r1_tau_count;
+  real<lower = 0> r2_tau_count;
   
-  // real<lower = 0> sigma;
-  // matrix[nb, np] omega_raw;
+  real<lower = 0> sigma;
+  matrix[nb, np] omega_raw;
 }
 transformed parameters {
   
   matrix[nb, np] logit_psi;
   matrix[nb, np] log_lambda;
-  vector<lower = 0>[np] tau_count;
-  vector<lower = 0>[np] lambda_delta;
-  vector<lower = 0>[np] lambda_gamma;
+  real<lower = 0> tau_count;
+  real<lower = 0> lambda_delta;
+  real<lower = 0> lambda_gamma;
   matrix[P_global, np] gamma;
   matrix[P_local, np] delta;
 
@@ -59,11 +59,11 @@ transformed parameters {
   tau_count = r1_tau_count .* sqrt(r2_tau_count);
 
   // Scaling coefficient matrices
-  delta = delta_std * diag_matrix(lambda_delta .* tau_count);
-  gamma = gamma_std * diag_matrix(lambda_gamma .* tau_count);
+  delta = tau_count * lambda_delta * delta_std;
+  gamma = tau_count * lambda_gamma * gamma_std;
   
   // Latent bout-level species/size occupancy
-  logit_psi = rep_matrix(alpha0, nb) + X_env * alpha; #+ sigma * L * omega_raw;
+  logit_psi = rep_matrix(alpha0, nb) + X_env * alpha + sigma * L * omega_raw;
   
   // Counts by species/size
   log_lambda = rep_matrix(delta0, nb) + X_local * delta + X_global * gamma;
@@ -92,12 +92,12 @@ model {
   r2_tau_count ~ inv_gamma(0.5 * nu_tau, 0.5 * nu_tau);
   
   // Sd of bout-level spatial random effects
-  // sigma ~ normal(0, 1.0);
+  sigma ~ normal(0, 1.0);
   
   // Unscaled bout-level random effects
-  // for(k in 1:np){
-  //   omega_raw[, k] ~ std_normal();
-  // }
+  for(k in 1:np){
+    omega_raw[, k] ~ std_normal();
+  }
   
   // Data model 
   for(k in 1:np){
