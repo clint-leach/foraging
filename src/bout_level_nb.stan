@@ -2,18 +2,20 @@ data {
   int<lower = 1> nb;
   vector[nb] nd;
   int<lower = 1> np;
-  int<lower = 1> nsp;
   int<lower = 1> nr;
-  int<lower = 1> ny;
-  int y[np, nb];
-  matrix[nb, 2] X;
-  int bout_idx[nb];
-  int sp_idx[np];
-  int y_idx[nb];
+  int<lower = 1> nt;
+  int<lower = 1> npred_x;
+  int<lower = 1> npred_t;
+  int<lower = 0> P_t;
+  array[np, nb] int<lower = 0> y;
+  vector[nb] otters;
+  vector[npred_x] otter_pred;
+  matrix[nb, P_t] X_t;
+  matrix[npred_t, P_t] X_t_pred;
+  matrix[nb, nr] K_r;
+  matrix[nb, nt] K_t;
   matrix[nb, nb] dists;
   matrix[nb, nb] L;
-  int blocks[2, nr];
-  int block_size[nr];
 }
 transformed data{
   vector[nb] log_nd;
@@ -21,65 +23,65 @@ transformed data{
 }
 parameters {
   vector[np] lambda0;
-  vector[np] psi0;
-  vector[np] r;
-  vector<lower = 0>[2] beta;
-  vector<lower = 0>[np] tau;
-  vector<lower = 0>[np] nu;
+  vector[np] h_raw;
+  vector<lower = 0>[np] tau_raw;
+  matrix[P_t, np] gamma;
   vector<lower = 0>[np] phi;
-  real<lower = 0> sigma;
-  matrix[nb, np] omega_raw;
+  row_vector[np] mu_psi;
+  vector<lower = 0>[np] sigma_eta;
+  vector<lower = 0>[np] sigma_eps;
+  matrix[nr, np] epsilon_raw;
+  matrix[nt, np] eta_raw;
 }
 transformed parameters {
   
-  // matrix[nb, np] omega;
-  matrix[nb, np] logit_psi_niche;
-  matrix[nb, np] logit_psi;
   matrix[nb, np] log_lambda;
-  vector[nb] c;
+  matrix[nb, np] logit_psi;
+  vector[np] h;
+  vector[np] tau;
+  matrix[nb, np] delta;
+
+  // Occupancy
+  logit_psi = rep_matrix(mu_psi, nb) + K_r * diag_post_multiply(epsilon_raw, sigma_eps) + K_t * diag_post_multiply(eta_raw, sigma_eta);  
+
+  // Counts
+  delta = X_t * gamma;
+
+  tau = 2.0 * tau_raw;
+  h = 2.0 * h_raw;
   
-  // Otter feeding niche
-  c = - X * beta;
-  
-  // Counts by species/size
   for(k in 1:np){
     for(i in 1:nb){
-      log_lambda[i, k] = lambda0[k] - nu[k] * (c[i] - r[k]) ^ 2;
-      logit_psi_niche[i, k] = psi0[k] - tau[k] * (c[i] - r[k]) ^ 2;
-      logit_psi[i, k] = logit_psi_niche[i, k] + sigma * omega_raw[i, k];
+      log_lambda[i, k] = lambda0[k] - tau[k] * (otters[i] + delta[i, k] - h[k]) ^ 2;
     }
   }
 }
 
 model {
   
-  // Static occupancy regression coefficients
-  beta ~ normal(0, 1.0);
-  
-  // Otter niche width
-  tau ~ normal(0, 10);
-  nu ~ normal(0, 10);
-  
-  // Peak counts
+  // Occupancy random effects
+  mu_psi ~ normal(0, 5.0);
+  sigma_eta ~ normal(0, 2.5);
+  sigma_eps ~ normal(0, 2.5);
+  to_vector(eta_raw) ~ std_normal();
+  to_vector(epsilon_raw) ~ std_normal();
+
+  // Maximum count
   lambda0 ~ normal(0, 2.5);
   
-  // Peak occupancy probability
-  psi0 ~ normal(0, 5);
-  
-  // Prey niche axis positions
-  r ~ normal(0, 1);
+  // Prey response to otter abundance
+  tau_raw ~ std_normal();
 
-  // Sds of bout-level random effects
-  sigma ~ normal(0, 1.0);
+  // Cumulative otter abundance at maximum count
+  h_raw ~ std_normal();
   
-  // Unscaled bout-level random effects
-  for(k in 1:np){
-    omega_raw[, k] ~ std_normal();
-  }
+  // Otter abundance shift regression coefficients
+  to_vector(gamma) ~ normal(0, 2.0);
+
 
   // Overdispersion
   phi ~ inv_gamma(2, 2);
-  
+
   // Data model 
   for(k in 1:np){
     for(i in 1:nb){
@@ -91,18 +93,33 @@ model {
       }
     }
   }
-
 }
 generated quantities{
+  
+  array[np, nb] int yhat;
+  matrix[npred_x, np] lambda_x;
+  matrix[npred_t, np] lambda_t;
+  matrix[npred_t, np] delta_pred;
 
-  int yhat[np, nb];
-
+  // Simulate observations
   for(k in 1:np){
     for(i in 1:nb){
 
       int zhat = bernoulli_logit_rng(logit_psi[i, k]);
 
       yhat[k][i] = zhat * neg_binomial_2_log_rng(log_nd[i] + log_lambda[i, k], phi[k]);
+    }
+  }
+  
+  // Calculate predicted lambdas
+  delta_pred = X_t_pred * gamma;
+
+  for(k in 1:np){
+    for(i in 1:npred_x){
+      lambda_x[i, k] = lambda0[k] - tau[k] * (otter_pred[i] - h[k]) ^ 2;
+    }
+    for(t in 1:npred_t){
+      lambda_t[t, k] = lambda0[k] - tau[k] * (delta_pred[t, k] - h[k]) ^ 2;
     }
   }
 }
