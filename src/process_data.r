@@ -44,7 +44,7 @@ data$preysize_cd[data$success_cd == "y" & data$preysize_cd == ""] <- 4
 data <- subset(data, !is.na(otter_lat))
 
 # Ordering the data and bout_ids
-data <- arrange(data, site_name, year, bout_id) %>% 
+data <- arrange(data, year, site_name, bout_id) %>% 
   mutate(bout_id = factor(bout_id, levels = unique(bout_id)))
 
 # Generating names for sp x size categories
@@ -52,29 +52,30 @@ data <- data %>%
   mutate(preysize_cat = stringr::str_sub(preysize_cd, 1, 1),
          prey_cat = stringr::str_c(SOFA_category, "_", preysize_cat))
 
-# Lumping into SOFA taxonomic categories (summing over species and fine-grained size)
+# Aggregating by bout and SOFA taxonomic categories (summing over species and fine-grained size)
 agg <- data %>% 
-  ddply(.(bout_id, dive_num, prey_cat), summarise,
+  ddply(.(bout_id, prey_cat), summarise,
         prey_qty = sum(prey_qty, na.rm = TRUE))
 
 # Reformatting to a wide format (while filling in zeros)
 complete <- agg %>% 
   pivot_wider(names_from = prey_cat, values_from = prey_qty, values_fill = 0, names_sort = TRUE) 
 
-# Keeping only major prey 
-prey_sub <- complete %>% 
-  dplyr::select(bout_id, dive_num,
-                (starts_with("clam") | starts_with("crab") | starts_with("modiolus") | starts_with("mussel") | starts_with("urchin")) &
-                !ends_with("9")) 
+# Evaluating prevalence of prey categories to set cut-offs for inclusion
+pbouts <- agg %>% 
+  subset(!is.na(prey_cat)) %>% 
+  mutate(prey_sp = str_split(prey_cat, pattern = "_", simplify = TRUE)[, 1],
+         prey_sz = str_split(prey_cat, pattern = "_", simplify = TRUE)[, 2]) %>% 
+  subset(prey_sp != "unidentified") %>% 
+  ddply(.(prey_cat), summarise,
+        total = sum(prey_qty),
+        nbouts = length(bout_id),
+        pbouts = nbouts / length(unique(agg$bout_id))) %>% 
+  subset(nbouts > 50)
 
-# Species index of each of the prey categories
-sp_idx <- prey_sub %>% 
-  dplyr::select(!(bout_id:dive_num)) %>% 
-  names() %>% 
-  str_split(pattern = "_", simplify = TRUE) %>% 
-  magrittr::extract(, 1) %>% 
-  as.factor() %>% 
-  as.numeric()
+# Keeping only major prey  (collected on at least 50 bouts)
+prey_sub <- complete %>% 
+  dplyr::select(bout_id, pbouts$prey_cat) 
 
 # Spatial processing ===========================================================
 
@@ -84,7 +85,7 @@ bout_coords <- data %>%
         long = otter_long[1],
         lat = otter_lat[1], 
         site = site_name[1],
-        year = year[1])
+        bout_year = year[1])
 
 ## Aligning with otter abundance raster
 
@@ -99,16 +100,12 @@ otter_grid <- brick("data/otter_mean.grd")
 crs(otter_grid) <- "EPSG:26708"
 bout_pts_aligned <- spTransform(bout_pts, wkt(otter_grid))
 
-# # Extracting otter density in 800m buffer
-# otters <- raster::extract(otter_grid, bout_pts_aligned, buffer = 800) %>% 
-#   laply(colMeans, na.rm = T)
-
 # Computing kernel-weighted otter abundance at each bout
 otter_pts <- rasterToPoints(otter_grid, spatial = TRUE)
 otter_values <- extract(otter_grid, otter_pts)
 
 distances <- pointDistance(otter_pts, bout_pts_aligned)
-K <- exp(- distances ^ 2 / 1000 ^ 2)
+K <- exp(- distances ^ 2 / 500 ^ 2)
 
 otters <- t(otter_values) %*% K %>% t()
 
@@ -116,7 +113,7 @@ otters <- t(otter_values) %*% K %>% t()
 otters <- cbind(0, otters)
 colnames(otters) <- c(1992:2018)
 
-# Reformatting to dataframe (and shift year indexing by 1)
+# Reformatting to dataframe
 otter_df <- otters %>% 
   as.data.frame() %>% 
   mutate(bout_id = bout_coords$bout_id) %>% 
@@ -124,111 +121,71 @@ otter_df <- otters %>%
                names_to = "year", 
                values_to = "density",
                names_transform = list(year = as.integer)) %>% 
-  mutate(year = year + 1) %>% 
-  right_join(bout_coords)
+  left_join(bout_coords)
 
-## Bathymetry 
+# Otter metrics
+otter_x <- otter_df %>% 
+  ddply(.(bout_id), summarise,
+        lagged = density[year == (bout_year[1] - 1)],
+        cumulative = sum(density[year < bout_year[1]]),
+        occ_time = min(year[density > 0.25]),
+        end = max(density)) %>% 
+  left_join(bout_coords) %>% 
+  mutate(occ_time = ifelse(occ_time < Inf, occ_time, bout_year))
 
-# (Note this was extracted from ArcGIS gdb using ArcRasterRescue:
-# Barnes, Richard. 2020. Arc Raster Rescue. Software. doi: 10.5281/zenodo.4128479.)
-
-# Depth
-depth <- raster("data/bathymetry.tif")
-bout_depth <- raster::extract(depth, spTransform(bout_pts, crs(depth))) 
-bout_depth[bout_depth < -1000] <- NA
-
-# Slope
-slope <- raster("data/slope.tif")
-bout_slope <- raster::extract(slope, spTransform(bout_pts, crs(slope)))
-bout_slope[bout_slope < -1000] <- NA
-
-## Current
-current <- raster("data/current/w001001.adf") 
-bout_current <- raster::extract(current, spTransform(bout_pts, crs(current)))
-
-# Combining all covariates and dropping bouts with missing data
-bout_dat <- otter_df %>% 
-  mutate(depth = bout_depth,
-         slope = bout_slope,
-         current = bout_current) %>% 
-  subset(!(is.na(depth) | is.na(slope) | is.na(current))) %>% 
-  mutate(bout_idx = 1:length(bout_id))
-
-##  Spatial covariance
-
-# # Mapping bouts to years
-# years <- unique(bout_coords$year) %>% sort()
-# K_t <- daply(bout_coords, .(bout_id), function(x) years %in% x$year)
+# ## Bathymetry 
 # 
-# # Mapping bouts to regions
-# regions <- unique(bout_coords$site) %>% sort()
-# K_r <- daply(bout_coords, .(bout_id), function(x) regions %in% x$site)
+# # (Note this was extracted from ArcGIS gdb using ArcRasterRescue:
+# # Barnes, Richard. 2020. Arc Raster Rescue. Software. doi: 10.5281/zenodo.4128479.)
 # 
-# K <- daply(bout_coords, .(bout_id), function(x) domains$site == x$site & domains$year == x$year)
+# # Depth
+# depth <- raster("data/bathymetry.tif")
+# bout_depth <- raster::extract(depth, spTransform(bout_pts, crs(depth))) 
+# bout_depth[bout_depth < -1000] <- NA
+# 
+# # Slope
+# slope <- raster("data/slope.tif")
+# bout_slope <- raster::extract(slope, spTransform(bout_pts, crs(slope)))
+# bout_slope[bout_slope < -1000] <- NA
+# 
+# ## Current
+# current <- raster("data/current/w001001.adf") 
+# bout_current <- raster::extract(current, spTransform(bout_pts, crs(current)))
+# 
+# # Combining all covariates and dropping bouts with missing data
+# bout_dat <- otter_x %>% 
+#   mutate(depth = bout_depth,
+#          slope = bout_slope,
+#          current = bout_current) %>% 
+#   subset(!(is.na(depth) | is.na(slope) | is.na(current))) %>% 
+#   mutate(bout_idx = 1:length(bout_id))
 
-## Calculating distance matrix for spatial covariance
+##  Spatial random effects
+
+# Mapping bouts to regions
+regions <- unique(bout_coords$site) %>% sort()
+K_r <- daply(bout_coords, .(bout_id), function(x) regions %in% x$site)
+
+# Mapping bouts to years
+years <- unique(bout_coords$bout_year) %>% sort()
+K_t <- daply(bout_coords, .(bout_id), function(x) years %in% x$bout_year)
 
 # Computing pairwise bout distance matrix
-d <- pointDistance(cbind(bout_dat$long, bout_dat$lat), cbind(bout_dat$long, bout_dat$lat), lonlat = TRUE, allpairs = TRUE)
-
-# Zero-ing out correlation among sites and years
-time_mask <- outer(bout_dat$year, bout_dat$year, function(x, y) x == y)
-region_mask <- outer(bout_dat$site, bout_dat$site, function(x, y) x == y)
-
-d <- d * time_mask * region_mask
-
-# Creating distance matrix indices for site x year
-domains <- bout_dat %>% 
-  ddply(.(site, year), summarise,
-        nbouts = length(bout_id),
-        first = bout_idx[1],
-        last = bout_idx[nbouts])
+d <- pointDistance(cbind(otter_x$long, otter_x$lat), cbind(otter_x$long, otter_x$lat), lonlat = TRUE, allpairs = TRUE)
 
 # Saving =======================================================================
 
-# # Aside: looking at GB contour data from Ben
-# bath <- st_read("data/bathy/glba_bathy")
-# 
-# bout_pts <- st_as_sf(bout_coords, coords = c("long", "lat"), crs = 4269)
-# bout_pts <- st_transform(bout_pts, crs = st_crs(bath))
-# 
-# bout_pts <- bout_pts %>% 
-#   mutate(missing = bout_id %in% missing$bout_id)
-# 
-# foo <- st_nearest_feature(bout_pts, bath)
-# 
-# depth_contour <- bath[foo, ]$DEPTH
-# 
-# bout_dat <- bout_dat %>% 
-#   mutate(contour = depth_contour,
-#          diff = abs(contour - depth))
-# 
-# bout_dat %>% 
-#   ggplot(aes(depth, contour)) + 
-#   geom_point() + 
-#   geom_abline(intercept = 0, slope = 1)
-# 
-# subset(bout_dat, diff == max(bout_dat$diff, na.rm = TRUE))
-# 
-# bath %>%
-#   ggplot() + 
-#   geom_sf(aes(color = DEPTH), size = 0.01)  + 
-#   geom_sf(data = bout_pts, inherit.aes = FALSE, size = 0.1, shape = 1)
-
-# Subsetting to bouts with complete data
-y <- subset(prey_sub, bout_id %in% bout_dat$bout_id)
-
-# Identifying the row index at which eat new bout starts
-bout_length <- ddply(y, .(bout_id), summarise,
-                     nd = dive_num %>% unique %>% length) %>% 
-  mutate(idx = cumsum(c(1, nd[1:(length(nd) - 1)])))
+# Computing number of dives in each bout and combining with other bout data
+bouts <- ddply(data, .(bout_id), summarise,
+               nd = dive_num %>% unique %>% length) %>% 
+  join(otter_x) %>% 
+  mutate(bout_idx = 1:nrow(otter_x))
 
 # Packaging and saving
-all <- list(y = y,
-            sp_idx = sp_idx,
-            bout_length = bout_length,
-            bout_dat = bout_dat, 
-            domains = domains,
-            d = d)
+all <- list(y = prey_sub,
+            bout_dat = bouts, 
+            d = d,
+            K_r = K_r,
+            K_t = K_t)
 
 saveRDS(all, "data/processed.rds")
