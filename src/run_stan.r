@@ -24,7 +24,7 @@ t_occ <- bouts$occ_time - 1993
 
 # Basis function matrices for time of occupancy
 X_t <- bSpline(t_occ, knots = seq(min(t_occ) + 5, max(t_occ) - 5, length.out = 4), degree = 3)
-X_t_pred <- bSpline(seq(min(t_occ), max(t_occ), by = 1), knots = seq(min(t_occ) + 5, max(t_occ) - 5, length.out = 4), degree = 3)
+X_t_pred <- bSpline(seq(min(t_occ), max(t_occ), by = 1), knots = seq(min(t_occ) + 5, max(t_occ) - 5, length.out = 4), degree = 3, intercept = F)
 
 # Cholesky matrix for spatial covariance
 rho <- 100 ^ 2
@@ -50,22 +50,39 @@ const <- list(nb = nrow(bouts),
               K_r = all$K_r,
               K_t = all$K_t)
 
-inits <- list(lambda0 = rep(0.0, const$np),
-              h_raw = rep(0.0, const$np),
-              tau_raw = rep(0.1, const$np),
-              gamma = matrix(0.0, const$P_t, const$np),
-              phi = rep(1.0, const$np),
-              mu_psi = rep(0.0, const$np),
-              sigma_eta = rep(1.0, const$np),
-              sigma_eps = rep(1.0, const$np),
-              eta_raw = matrix(0, nrow = const$nt, ncol = const$np),
-              epsilon_raw = matrix(0, nrow = const$nr, ncol = const$np)
-              )
+inits <- list(
+  list(lambda0 = rep(0.0, const$np),
+       h_raw = rep(0.0, const$np),
+       tau = rep(0.1, const$np),
+       gamma_raw = matrix(0.0, const$P_t, const$np),
+       mu_gamma = rep(0.0, const$P_t),
+       sigma_gamma = 0.1,
+       phi_inv = rep(1.0, const$np),
+       mu_psi = rep(0.0, const$np),
+       sigma_eta = rep(1.0, const$np),
+       sigma_eps = rep(1.0, const$np),
+       eta_raw = matrix(0, nrow = const$nt, ncol = const$np),
+       epsilon_raw = matrix(0, nrow = const$nr, ncol = const$np)),
+  list(lambda0 = rnorm(const$np),
+       h_raw = rnorm(const$np),
+       tau = rep(1.0, const$np),
+       gamma_raw = matrix(0.0, const$P_t, const$np),
+       mu_gamma = rnorm(const$P_t),
+       sigma_gamma = 0.5,
+       phi_inv = rep(0.1, const$np),
+       mu_psi = rnorm(const$np),
+       sigma_eta = rep(0.1, const$np),
+       sigma_eps = rep(0.1, const$np),
+       eta_raw = matrix(0, nrow = const$nt, ncol = const$np),
+       epsilon_raw = matrix(0, nrow = const$nr, ncol = const$np)))
 
 mcmc <- stan(file = "src/bout_level_nb.stan",
              data = const,
-             init = list(inits),
-             iter = 2000,
-             chains = 1)
+             init = inits,
+             iter = 4000,
+             chains = 2, 
+             pars = c("logit_psi", "delta"), 
+             include = FALSE)
+
 
 saveRDS(mcmc, "output/bout_level_nb_chain.rds")
