@@ -24,9 +24,11 @@ transformed data{
 parameters {
   vector[np] lambda0;
   vector[np] h_raw;
-  vector<lower = 0>[np] tau_raw;
-  matrix[P_t, np] gamma;
-  vector<lower = 0>[np] phi;
+  vector<lower = 0>[np] tau;
+  matrix[P_t, np] gamma_raw;
+  vector[P_t] mu_gamma;
+  real<lower = 0> sigma_gamma;
+  vector<lower = 0>[np] phi_inv;
   row_vector[np] mu_psi;
   vector<lower = 0>[np] sigma_eta;
   vector<lower = 0>[np] sigma_eps;
@@ -37,17 +39,21 @@ transformed parameters {
   
   matrix[nb, np] log_lambda;
   matrix[nb, np] logit_psi;
+  matrix[P_t, np] gamma;
   vector[np] h;
-  vector[np] tau;
+  vector[np] phi;
   matrix[nb, np] delta;
 
+  // Overdispersion
+  phi = 1.0 ./ phi_inv;
+  
   // Occupancy
   logit_psi = rep_matrix(mu_psi, nb) + K_r * diag_post_multiply(epsilon_raw, sigma_eps) + K_t * diag_post_multiply(eta_raw, sigma_eta);  
 
   // Counts
+  gamma = rep_matrix(mu_gamma, np) + sigma_gamma * gamma_raw;
   delta = X_t * gamma;
 
-  tau = 2.0 * tau_raw;
   h = 2.0 * h_raw;
   
   for(k in 1:np){
@@ -70,18 +76,19 @@ model {
   lambda0 ~ normal(0, 2.5);
   
   // Prey response to otter abundance
-  tau_raw ~ std_normal();
+  tau ~ gamma(2, 0.1);
 
   // Cumulative otter abundance at maximum count
   h_raw ~ std_normal();
   
   // Otter abundance shift regression coefficients
-  to_vector(gamma) ~ normal(0, 2.0);
-
+  to_vector(gamma_raw) ~ std_normal();
+  mu_gamma ~ normal(0, 2.0);
+  sigma_gamma ~ normal(0, 1.0);
 
   // Overdispersion
-  phi ~ inv_gamma(2, 2);
-
+  phi_inv ~ normal(0, 5);
+  
   // Data model 
   for(k in 1:np){
     for(i in 1:nb){
