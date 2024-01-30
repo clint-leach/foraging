@@ -23,7 +23,9 @@ data <- read.csv("data/GLBA_SEOT_Forage_Data_1993-2019.csv") %>%
                                      "2B" = "2b", 
                                      "2C" = "2c", 
                                      "1" = "1z",
-                                     "4a" = "4z"))
+                                     "4a" = "4z"),
+         SOFA_category = dplyr::recode(SOFA_category,
+                                       "mussel" = "mytilus"))
 
 # Dropping outlier longitude (check if these can be corrected)
 data <- subset(data, otter_long < -135.6)
@@ -68,6 +70,8 @@ pbouts <- agg %>%
          prey_sz = str_split(prey_cat, pattern = "_", simplify = TRUE)[, 2]) %>% 
   subset(prey_sp != "unidentified") %>% 
   ddply(.(prey_cat), summarise,
+        prey_sp = prey_sp[1],
+        prey_sz = prey_sz[1],
         total = sum(prey_qty),
         nbouts = length(bout_id),
         pbouts = nbouts / length(unique(agg$bout_id))) %>% 
@@ -76,6 +80,20 @@ pbouts <- agg %>%
 # Keeping only major prey  (collected on at least 50 bouts)
 prey_sub <- complete %>% 
   dplyr::select(bout_id, pbouts$prey_cat) 
+
+# Table for supplement
+data %>% 
+  subset(prey_cat %in% pbouts$prey_cat) %>% 
+  ddply(.(prey_cat, prey_name), summarise,
+        count = sum(prey_qty),
+        sci_name = Latin_name[1],
+        category = SOFA_category[1],
+        size = preysize_cat[1]) %>% 
+  join(pbouts) %>% 
+  mutate(prop = count / total) %>% 
+  arrange(prey_cat, desc(prop)) %>% 
+  subset(prop > 0.001) %>% 
+  dplyr::select(category, size, prey_name, sci_name, count, prop)
 
 # Spatial processing ===========================================================
 
