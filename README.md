@@ -10,4 +10,7 @@ All code is stored in the `src` directory and includes:
 -  `eda.r`: script to generate exploratory figures and summaries
 
 The scripts above write and read MCMC output to an `output` directory.
+
 Data and model inputs are expected to be stored in a `data` directory.
+-  Sea otter foraging observations: https://doi.org/10.5066/P9T6UB5G
+-  Model-based estimates of sea otter abundance: https://doi.org/10.5061/dryad.vt4b8gtx6
