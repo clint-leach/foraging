@@ -26,8 +26,7 @@ parameters {
   vector[np] h_raw;
   vector<lower = 0>[np] tau;
   matrix[P_t, np] gamma_raw;
-  vector[P_t] mu_gamma;
-  real<lower = 0> sigma_gamma;
+  vector<lower = 0>[np] sigma_gamma;
   vector<lower = 0>[np] phi_inv;
   row_vector[np] mu_psi;
   vector<lower = 0>[np] sigma_eta;
@@ -51,7 +50,10 @@ transformed parameters {
   logit_psi = rep_matrix(mu_psi, nb) + K_r * diag_post_multiply(epsilon_raw, sigma_eps) + K_t * diag_post_multiply(eta_raw, sigma_eta);  
 
   // Counts
-  gamma = rep_matrix(mu_gamma, np) + sigma_gamma * gamma_raw;
+  for(k in 1:np){
+    gamma[, k] = sigma_gamma[k] * gamma_raw[, k];
+  }
+  
   delta = X_t * gamma;
 
   h = 2.0 * h_raw;
@@ -83,8 +85,7 @@ model {
   
   // Otter abundance shift regression coefficients
   to_vector(gamma_raw) ~ std_normal();
-  mu_gamma ~ normal(0, 2.0);
-  sigma_gamma ~ normal(0, 1.0);
+  sigma_gamma ~ normal(0, 0.5);
 
   // Overdispersion
   phi_inv ~ normal(0, 5);
