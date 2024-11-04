@@ -1,5 +1,6 @@
 library(rstan)
 library(ggplot2)
+library(ggspatial)
 library(magrittr)
 library(plyr)
 library(dplyr)
@@ -10,6 +11,7 @@ library(stringr)
 library(patchwork)
 library(sf)
 library(lubridate)
+library(rnaturalearth)
 
 # Load in foraging data
 all <- readRDS("data/processed.rds")
@@ -35,15 +37,24 @@ prey_sp <- ddply(y_long, .(prey), summarise,
          prey_sp = factor(prey_sp, labels = c("clam", "crab", "italic(Modiolus)", "italic(Mytilus)", "scallop", "snail", "star", "urchin")))
   
 # Read in MCMC output
-mcmc <- readRDS("output/bout_level_nb_chain.rds")
+mcmc <- readRDS("output/chain.rds")
 
 # Figure 1: Bout locations =====================================================
 
-# Reading in Glacier Bay shapefile for mapping
-gb <- st_read(dsn = "data/PH6502/historicl1.shp")
+bout_coords <- all$bout_dat %>% 
+  st_as_sf(coords = c("long", "lat"), crs = "EPSG:4269")
 
+# Reading in Glacier Bay shapefile for mapping
+gb <- st_read(dsn = "data/PH6502/historicl1.shp") 
+
+# Bounding box for inset
+bbox <- st_bbox(st_buffer(gb, 10000)) %>% 
+  st_as_sfc()
+
+
+# Plotting year of observation
 ggplot(gb) + 
-  geom_sf(size = 0.25) + 
+  geom_sf(color = "gray50", linewidth = 0.2) + 
   geom_point(aes(long, lat, color = bout_year), data = arrange(boutdat, desc(bout_year)), size = 0.05) + 
   scale_color_viridis_c(guide = "none") +
   theme_bw() + 
@@ -54,13 +65,13 @@ ggplot(gb) +
   xlim(c(-136.79, -135.8)) +
   xlab("longitude") + 
   ylab("latitude") + 
-  ggtitle("(a)") + 
-  annotation_scale(location = "bl") -> fig1a
+  ggtitle("(a)") -> fig1a
 
+# Plotting year of first otter occupancy
 ggplot(gb) + 
-  geom_sf(size = 0.25) + 
+  geom_sf(color = "gray50", linewidth = 0.2) + 
   geom_point(aes(long, lat, color = occ_time), data = arrange(boutdat, desc(bout_year)), size = 0.05) + 
-  scale_color_viridis_c("year") +
+  scale_color_viridis_c("year", breaks = c(1993, 2006, 2019), limits = c(1993, 2019)) +
   theme_bw() + 
   theme(axis.text.x=element_text(angle=45, hjust=1),
         axis.text.y = element_blank(),
@@ -71,12 +82,29 @@ ggplot(gb) +
   xlab("longitude") +
   ylab("")  + 
   ggtitle("(b)") +
-  annotation_north_arrow(location = "bl", height = unit(0.5, "in"), width = unit(0.4, "in")) -> fig1b
+  annotation_north_arrow(pad_y = unit(0.3, "in"), location = "bl", height = unit(0.3, "in"), width = unit(0.25, "in")) +
+  annotation_scale(location = "bl") -> fig1b
+
+# Inset map of Alaska
+world <- ne_countries(scale = "medium", returnclass = "sf")
+
+ggplot(data = world) + 
+  geom_sf(fill = "white") + 
+  geom_sf(data = bbox, color = "red", alpha = 0.0, linewidth = 1.0) +
+  coord_sf(xlim = c(-167, -130), ylim = c(55, 71)) +
+  theme_bw() + 
+  theme(axis.text = element_blank(),
+        panel.grid = element_blank(),
+        axis.ticks = element_blank(), 
+        panel.border = element_rect(linewidth = 0.25)) + 
+  xlab(NULL) + 
+  ylab(NULL) -> inset
 
 pdf(file = "output/figures/Figure1.pdf",
     width = 8.5, height = 5)
 
-fig1a + fig1b + plot_layout(ncol = 2)
+(fig1a + inset_element(inset, left = 0.01, bottom = 0, right = 0.38, top = 0.3)) +
+  fig1b + plot_layout(ncol = 2)
 
 dev.off()
 
@@ -121,13 +149,14 @@ lambda_x %>%
   geom_ribbon(aes(otters, ymin = low_lambda, ymax = high_lambda, fill = factor(prey_sz)), alpha = 0.5, inherit.aes = FALSE) +
   scale_color_brewer("prey size", palette = "Dark2") +
   scale_fill_brewer("prey size", palette = "Dark2") +
-  facet_grid(prey_sp ~ ., scales = "free_y", labeller = label_parsed) + 
+  facet_wrap(~prey_sp, scales = "free_y", labeller = label_parsed, ncol = 1, strip.position = "left") + 
   theme_classic() +
-  theme(strip.background = element_blank()) +
+  theme(strip.background = element_blank(),
+        strip.placement = "outside") +
   scale_x_continuous(expand = c(0, 0)) +
   scale_y_continuous(n.breaks = 3) +
   xlab("local cumulative sea otter abundance") +
-  ylab(expression(lambda)) -> fig3
+  ylab("catch per dive") -> fig3
 
 
 pdf(file = "output/figures/Figure3.pdf",
@@ -155,10 +184,11 @@ lambda_t %>%
   geom_ribbon(aes(occ_year, ymin = low_lambda, ymax = high_lambda, fill = factor(prey_sz)), alpha = 0.5, inherit.aes = FALSE) +
   scale_color_brewer("prey size", palette = "Dark2") +
   scale_fill_brewer("prey size", palette = "Dark2") +
-  facet_grid(prey_sp ~ ., scales = "free_y", labeller = label_parsed) + 
+  facet_wrap(~prey_sp, scales = "free_y", labeller = label_parsed, ncol = 1, strip.position = "left") + 
   theme_classic() +
-  theme(strip.background = element_blank()) +
-  ylab(expression(lambda)) +
+  theme(strip.background = element_blank(),
+        strip.placement = 'outside') +
+  ylab("catch per dive") +
   scale_x_continuous("year", expand = c(0, 0)) +
   scale_y_continuous(n.breaks = 4) -> fig4
 
@@ -196,10 +226,11 @@ psi_t %>%
   geom_linerange(aes(occ_year, ymin = low_psi, ymax = high_psi, color = factor(prey_sz)), alpha = 0.5, inherit.aes = FALSE) +
   scale_color_brewer("prey size", palette = "Dark2") +
   scale_fill_brewer("prey size", palette = "Dark2") +
-  facet_grid(prey_sp ~ ., scales = "fixed", labeller = label_parsed) + 
+  facet_wrap(~prey_sp, scales = "fixed", labeller = label_parsed, ncol = 1, strip.position = "left") + 
   theme_classic() +
-  theme(strip.background = element_blank()) +
-  ylab(expression(psi)) +
+  theme(strip.background = element_blank(),
+        strip.placement = "outside") +
+  ylab("probability of presence in bout") +
   scale_x_continuous("year", expand = c(0, 0.2), breaks = seq(1995, 2015, by = 5)) +
   scale_y_continuous(limits = c(0.0, 1.0), n.breaks = 3) -> fig5
 
@@ -308,7 +339,12 @@ lambda %>%
   facet_wrap(~ prey, scales = "free_y")
 
 
-# Plotting spatial occupancy ===================================================
+# Figure S1: Plotting spatial occupancy ========================================
+
+region_coords <- boutdat %>% 
+  ddply(.(site), summarise,
+        long = median(long),
+        lat = median(lat))
 
 sigma_eps <- rstan::extract(mcmc, "sigma_eps", permute = TRUE)[[1]]
 mu_psi <-  rstan::extract(mcmc, "mu_psi", permute = TRUE)[[1]]
@@ -324,7 +360,8 @@ psi_r <- rstan::extract(mcmc, "epsilon_raw", permute = TRUE)[[1]] %>%
         mean_psi = mean(psi),
         low_psi = quantile(psi, 0.1),
         high_psi = quantile(psi, 0.9)) %>% 
-  join(prey_sp)
+  join(prey_sp) %>% 
+  join(region_coords)
 
 psi_r %>% 
   ggplot(aes(site, mean_psi, color = factor(prey_sz))) +
@@ -339,6 +376,26 @@ psi_r %>%
   xlab("region") + 
   theme(axis.text.x=element_text(angle=45, hjust=1),
         strip.text = element_text(size = 7.0))
+
+
+pdf(file = "output/figures/FigureS1.pdf",
+    width = 5.5, height = 9)
+
+ggplot(gb) + 
+  geom_sf(color = "gray50", linewidth = 0.2) + 
+  geom_point(aes(long, lat, color = mean_psi), data = psi_r,  size = 2) + 
+  scale_color_viridis_c(expression(psi)) +
+  facet_wrap(~prey, nrow = 5) +
+  theme_bw() + 
+  theme(axis.text = element_blank(),
+        panel.grid = element_blank(),
+        strip.background = element_blank()) +
+  scale_y_continuous(expand = c(0.0, 0)) +
+  xlim(c(-136.79, -135.8)) +
+  xlab("") + 
+  ylab("")
+
+dev.off()
 
 # Variation in h ===============================================================
 
@@ -356,9 +413,9 @@ delta <- rstan::extract(mcmc, "delta_pred", permute = T)[[1]] %>%
   join(prey_sp)
 
 delta %>% 
-  ggplot(aes(occ_year, mean_h, color = prey_sz, group = prey_sz)) + 
+  ggplot(aes(occ_year, mean_h, color = factor(prey_sz), group = prey_sz)) + 
   geom_line() +
-  geom_ribbon(aes(ymin = low_h, ymax = high_h, fill = prey_sz), alpha = 0.5) + 
+  geom_ribbon(aes(ymin = low_h, ymax = high_h, fill = factor(prey_sz)), alpha = 0.5) + 
   scale_color_brewer("prey size", palette = "Dark2") +
   scale_fill_brewer("prey size", palette = "Dark2") +
   facet_grid(.~ prey_sp) + 
@@ -383,21 +440,21 @@ y_long %>%
 
 # Counts of a specific prey (by site)
 y_long %>% 
-  subset(prey == "scallop_1") %>% 
+  subset(prey == "modiolus_2") %>% 
   ggplot(aes(cumulative, ypd, color = bout_year)) + 
   geom_point() + 
   facet_wrap(. ~ site, scales = "free_y")
 
 # Counts of a specific prey (by bout year)
 y_long %>% 
-  subset(prey == "scallop_1") %>%
+  subset(prey == "modiolus_2") %>%
   ggplot(aes(cumulative, ypd, color = occ_time)) + 
   geom_point() + 
   facet_grid(bout_year ~ ., scales = "free_y")
 
 # Counts of a specific prey (by occupancy year)
 y_long %>% 
-  subset(prey == "scallop_1") %>%
+  subset(prey == "modiolus_2") %>%
   ggplot(aes(cumulative, ypd, color = bout_year)) + 
   geom_point() + 
   facet_grid(occ_time ~ ., scales = "free_y")
@@ -499,11 +556,6 @@ yhat_check <- rstan::extract(mcmc, "yhat")[[1]] %>%
         yhat = mean(y[y > 0]),
         var = var(y[y > 0])) %>% 
   join(prey_sp)
-  
-yhat_check %>%
-  join(y_sum, by = "prey") %>% 
-  ddply(.(prey), summarise,
-        pvar = mean(var > y_sum$var[y_sum$prey == prey]))
 
 # Proportion of zeros
 yhat_check %>% 
