@@ -5,17 +5,76 @@ library(tidyr)
 library(lubridate)
 library(ggplot2)
 library(raster)
-library(rgdal)
 library(sf)
 library(stringr)
 
 # Reading in prey lookup
-prey <- read.csv("data/LU_preytype.csv")
+prey <- read.csv("data/seaOtterForage_GlacierBay_Kloecker/GLBA_SEOT_forage_taxonomy_1993-2019.csv")
+
+# Grouping prey into taxonomic classes
+classify_prey <- function(phylum, class, order, family, genus){
+  
+  category <- "other"
+  
+  if(class == "Bivalvia" & order != "Mytiloida" & family != "Pectinidae"){
+    category <- "clam"
+  }
+  
+  if(genus == "Modilous"){
+    category <- "modiolus"
+  }
+  
+  if(order == "Mytiloida" & genus != "Modilous"){
+    category <- "mytilus"
+  }
+  
+  if(family == "Pectinidae"){
+    category <- "scallop"
+  }
+  
+  if(order == "Decapoda" & genus != "Pandalus"){
+    category <- "crab"
+  }
+  
+  if(class == "Gastropoda"){
+    category <- "snail"
+  }
+  
+  if(class %in% c("Asteroidea", "Ophiuroidea")){
+    category <- "star"
+  }
+  
+  if(class == "Echinoidea"){
+    category <- "urchin"
+  }
+  
+  if(class == "Polyplacophora"){
+    category <- "chiton"
+  }
+  
+  if(class == "Holothuroidea"){
+    category <- "cucumber"
+  }
+  
+  if(phylum %in% c("Annelida", "Sipuncula", "Annelida, Sipuncula")){
+    category <- "worm"
+  }
+  
+  if(phylum == ""){
+    category <- "unidentified"
+  }
+  
+  return(category)
+}
+
+prey <- prey %>% 
+  rowwise() %>% 
+  mutate(category = classify_prey(phylum, class, order, family, genus))
 
 # Reading in foraging data and formatting dates
-data <- read.csv("data/GLBA_SEOT_Forage_Data_1993-2019.csv") %>% 
+data <- read.csv("data/seaOtterForage_GlacierBay_Kloecker/GLBA_SEOT_forage_bouts_1993-2019.csv") %>% 
   join(prey) %>% 
-  mutate(bout_date = mdy(bout_date), 
+  mutate(bout_date = ymd(bout_date), 
          year = year(bout_date),
          month = month(bout_date),
          preysize_cd = dplyr::recode(preysize_cd, 
@@ -23,15 +82,13 @@ data <- read.csv("data/GLBA_SEOT_Forage_Data_1993-2019.csv") %>%
                                      "2B" = "2b", 
                                      "2C" = "2c", 
                                      "1" = "1z",
-                                     "4a" = "4z"),
-         SOFA_category = dplyr::recode(SOFA_category,
-                                       "mussel" = "mytilus"))
+                                     "4a" = "4z"))
+
+# Dropping regions outside the domain of the otter survey
+data <- subset(data, !(site_name %in% c("Dundas", "Althorp", "Inian", "Lemesurier", "")))
 
 # Dropping outlier longitude (check if these can be corrected)
 data <- subset(data, otter_long < -135.6)
-
-# Dropping regions outside the domain of the otter survey
-data <- subset(data, !(site_name %in% c("Dundas")))
 
 # Dropping non-foraging or interrupted dives
 data <- subset(data, success_cd %in% c("y", "n"))
@@ -52,9 +109,9 @@ data <- arrange(data, year, site_name, bout_id) %>%
 # Generating names for sp x size categories
 data <- data %>% 
   mutate(preysize_cat = stringr::str_sub(preysize_cd, 1, 1),
-         prey_cat = stringr::str_c(SOFA_category, "_", preysize_cat))
+         prey_cat = stringr::str_c(category, "_", preysize_cat))
 
-# Aggregating by bout and SOFA taxonomic categories (summing over species and fine-grained size)
+# Aggregating by bout and taxonomic categories (summing over species and fine-grained size)
 agg <- data %>% 
   ddply(.(bout_id, prey_cat), summarise,
         prey_qty = sum(prey_qty, na.rm = TRUE))
@@ -68,7 +125,7 @@ pbouts <- agg %>%
   subset(!is.na(prey_cat)) %>% 
   mutate(prey_sp = str_split(prey_cat, pattern = "_", simplify = TRUE)[, 1],
          prey_sz = str_split(prey_cat, pattern = "_", simplify = TRUE)[, 2]) %>% 
-  subset(prey_sp != "unidentified") %>% 
+  subset(prey_sp != "unidentified") %>%
   ddply(.(prey_cat), summarise,
         prey_sp = prey_sp[1],
         prey_sz = prey_sz[1],
@@ -84,16 +141,16 @@ prey_sub <- complete %>%
 # Table for supplement
 data %>% 
   subset(prey_cat %in% pbouts$prey_cat) %>% 
-  ddply(.(prey_cat, prey_name), summarise,
+  ddply(.(prey_cat, common_name), summarise,
         count = sum(prey_qty),
-        sci_name = Latin_name[1],
-        category = SOFA_category[1],
+        sci_name = scientific_name[1],
+        category = category[1],
         size = preysize_cat[1]) %>% 
   join(pbouts) %>% 
   mutate(prop = count / total) %>% 
   arrange(prey_cat, desc(prop)) %>% 
   subset(prop > 0.001) %>% 
-  dplyr::select(category, size, prey_name, sci_name, count, prop)
+  dplyr::select(category, size, common_name, sci_name, count, prop)
 
 # Spatial processing ===========================================================
 
@@ -103,7 +160,8 @@ bout_coords <- data %>%
         long = otter_long[1],
         lat = otter_lat[1], 
         site = site_name[1],
-        bout_year = year[1])
+        bout_year = year[1],
+        nd = dive_num %>% unique %>% length)
 
 ## Aligning with otter abundance raster
 
