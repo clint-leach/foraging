@@ -1,3 +1,8 @@
+
+
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.14042546.svg)](https://doi.org/10.5281/zenodo.14042546)
+
+
 # Analysis of sea otter foraging observations in Glacier Bay, Alaska
 
 This repository contains code to investigate spatio-temporal patterns in sea otter prey selection over the course of sea otter expansion across Glacier Bay from 1993 to 2019. 
